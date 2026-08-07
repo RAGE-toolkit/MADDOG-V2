@@ -1,0 +1,7 @@
+[console_scripts]
+maddog-assign-nodes = maddog.scripts.AssignNodeDetails:main
+maddog-assignment = maddog.scripts.Assignment:main
+maddog-lineage-assignment = maddog.scripts.LineageAssignment:main
+maddog-phylogeny = maddog.scripts.Phylogeny:main
+maddog-reduce-lineages = maddog.scripts.reduce_tip_lineage_assignments_mrca:main
+maddog-reroot = maddog.scripts.TreeReRoot:main

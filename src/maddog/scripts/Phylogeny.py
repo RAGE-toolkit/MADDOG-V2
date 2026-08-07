@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-"""
-Run clade-wise IQ-TREE using a clade assignment TSV and pre-existing clade trees.
-
-For each EPA_major_clade:
-  1. Extract only query sequence IDs from --input-alignment using --assignment.
-  2. Write <clade>.query.aligned.fa.
-  3. Find the matching clade directory under --clade-tree-dir.
-  4. Find the clade reference alignment and existing tree in that directory.
-  5. Merge clade reference alignment + extracted query alignment.
-  6. Run IQ-TREE using the existing tree as a constraint/start tree.
-
-Default outputs:
-  tmp/tree/<clade>/<clade>.query.aligned.fa
-  tmp/tree/<clade>/<clade>.merged.aligned.fa
-  tmp/tree/<clade>/<clade>.iqtree.*
-  tmp/tree/phylogeny_summary.tsv
-"""
 
 from __future__ import annotations
 
@@ -588,7 +571,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--threads",
-        default="AUTO",
+        default="8",
         help="Threads passed to IQ-TREE -nt. Default: AUTO",
     )
     parser.add_argument(

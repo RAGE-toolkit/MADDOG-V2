@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "maddog"
+version = "2.0.0"
+description = "MADDOG - lineage assignment and designation"
+readme = "README.md"
+requires-python = ">=3.9"
+
+authors = [
+    {name = "MADDOG developers"}
+]
+
+dependencies = [
+    "pandas",
+    "biopython",
+    "ete3",
+    "dendropy",
+]
+
+[project.scripts]
+
+maddog-assignment = "maddog.scripts.Assignment:main"
+maddog-phylogeny = "maddog.scripts.Phylogeny:main"
+maddog-reroot = "maddog.scripts.TreeReRoot:main"
+# Hyphenated aliases match the command names documented for users.
+maddog-assign-nodes = "maddog.scripts.AssignNodeDetails:main"
+maddog-lineage-assignment = "maddog.scripts.LineageAssignment:main"
+maddog-reduce-lineages = "maddog.scripts.reduce_tip_lineage_assignments_mrca:main"
+
+
+[tool.setuptools.packages.find]
+where = ["src"]

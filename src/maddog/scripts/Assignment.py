@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
-Normla mode:
-    python scripts/CladeAssignment.py   --ref-aln generic/rabv/tree/ref_plus_am3ca_am5.fa   --ref-tree generic/rabv/tree/ref_tree_am3c_am5.treefile   --query tmp/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --taxon-major generic/rabv/ref_major_clades.tsv   --taxon-minor generic/rabv/ref_minor_clades.tsv   --threads 6   --meta-data tmp/GenBank-matrix/gB_matrix_raw.tsv   --steps all   --skip-mafft
+python src/maddog/scripts/Assignment.py --ref-aln reference/rabv/reference_sequences/ref.fa --ref-tree reference/rabv/tree/ref.treefile --query test_data/Indian-sub/indian-sub.fa --taxon-major reference/rabv/epa_clades/ref_major_clades.tsv --taxon-minor reference/rabv/epa_clades/ref_minor_clades.tsv --threads 4 --steps all 
 
-Update mode:
-    python scripts/CladeAssignment.py   --ref-aln generic/rabv/tree/ref_plus_am3ca_am5.fa   --ref-tree generic/rabv/tree/ref_tree_am3c_am5.treefile   --query tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --aligned-out tmp/Update/Pad-alignment/alUnc509RefseqsMafftHandModified.fa   --taxon-major generic/rabv/ref_major_clades.tsv   --taxon-minor generic/rabv/ref_minor_clades.tsv   --threads 6   --meta-data tmp/Update/GenBank-matrix/gB_matrix_raw.tsv   --steps all   --skip-mafft --update
 """
 
 import os

@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: maddog
+Version: 2.0.0
+Summary: MADDOG - lineage assignment and designation
+Author: MADDOG developers
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pandas
+Requires-Dist: biopython
+Requires-Dist: ete3
+Requires-Dist: dendropy
+Dynamic: license-file
+
+Work in progress
+# MADDOG-V2
+
+conda env create -f env.yml
+
+

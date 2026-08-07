@@ -1,3 +1,4 @@
+#AssignNodeDetails.py
 from __future__ import annotations
 
 import re
@@ -9,8 +10,10 @@ from Bio import Phylo, SeqIO
 from argparse import ArgumentParser
 from Bio.Phylo.BaseTree import Clade, Tree
 
+#python src/maddog/scripts/AssignNodeDetails.py --tree tmp/tree/Indian-Sub/Indian-Sub.iqtree.treefile --output maddog_ref_test --ancestral_fasta tmp/tree/Indian-Sub/Indian-Sub.treetime_ancestral/ancestral_sequences.fasta
+
 class NodeAssigner:
-    def __init__(self, tree, ancestral_fasta, base_dir, ancestral_prefix, ancestral_digits, ancestral_index_base, support_mode, internal_order, no_tip_labels, min_bootstrap, min_tips):
+    def __init__(self, tree, ancestral_fasta, base_dir, ancestral_prefix, ancestral_digits, ancestral_index_base, support_mode, internal_order, no_tip_labels, min_bootstrap, min_tips, min_parent_tip_diff, min_exclusive_tips):
         self.tree = tree
         self.ancestral_fasta = ancestral_fasta
         self.base_dir = base_dir
@@ -22,9 +25,29 @@ class NodeAssigner:
         self.no_tip_labels = no_tip_labels
         self.min_bootstrap = min_bootstrap
         self.min_tips = min_tips
+        self.min_parent_tip_diff = min_parent_tip_diff
+        self.min_exclusive_tips = min_exclusive_tips
 
     def load_tree(self):
-        return Phylo.read(self.tree, "newick")
+        if not hasattr(self, "_tree_cache"):
+            self._tree_cache = Phylo.read(self.tree, "newick")
+
+            # Canonicalise child-clade order before assigning NODE_* IDs.
+            # Bio.Phylo ladderize(reverse=False) places smaller clades first,
+            # reproducing the traversal used by sea4_test and making NODE IDs,
+            # lineage ordering, and output tip ordering deterministic.
+            self._tree_cache.ladderize(reverse=False)
+
+        return self._tree_cache
+
+    def _internals_ape(self):
+        if not hasattr(self, "_internals_cache"):
+            tree = self.load_tree()
+            self._internals_cache = tree.get_nonterminals(order="preorder")
+        return self._internals_cache
+
+    #def internals(self):
+    #    return self._internals_ape()
 
     def terminals(self):
         return self.load_tree().get_terminals()
@@ -93,30 +116,44 @@ class NodeAssigner:
     def node_table(self):
         tree = self.load_tree()
 
+        ntips = len(tree.get_terminals())
+
+        # NodeInfo/MADDOG-compatible internal-node order
+        internal_nodes = tree.get_nonterminals(order="preorder")
+
         internal_node_names = {}
+        internal_node_numbers = {}
 
-        internal_nodes = tree.get_nonterminals(order=self.internal_order)
+        for i0, node in enumerate(internal_nodes):
+            internal_pos = i0 + 1
+            ape_node = ntips + internal_pos
 
-        for index, node in enumerate(internal_nodes, start=self.ancestral_index_base):
-            node_name = f"{self.ancestral_prefix}{index:0{self.ancestral_digits}d}"
+            ancestral_index = self.ancestral_index_base + i0
+            node_name = f"{self.ancestral_prefix}{ancestral_index:0{self.ancestral_digits}d}"
+
             internal_node_names[node] = node_name
+            internal_node_numbers[node] = ape_node
 
         parents = {}
 
-        for parent in tree.find_clades(order="level"):
+        for parent in tree.find_clades(order="preorder"):
             for child in parent.clades:
                 parents[child] = parent
 
         rows = []
 
-        for node in tree.find_clades(order=self.internal_order):
+        for node in tree.find_clades(order="preorder"):
 
             if node.is_terminal():
                 node_id = node.name
                 node_type = "terminal"
+                numeric_node = pd.NA
+                node_key = ""
             else:
                 node_id = internal_node_names[node]
                 node_type = "internal"
+                numeric_node = internal_node_numbers[node]
+                node_key = node_id
 
             parent = parents.get(node)
 
@@ -126,26 +163,31 @@ class NodeAssigner:
                 parent_id = parent.name
             else:
                 parent_id = internal_node_names[parent]
-            
-            #adding additional values
+
             descendant_tips = [tip.name for tip in node.get_terminals()]
             bootstrap_value = self.bootstrap(node)
 
-            rows.append({
+            row = {
+                "Node": numeric_node,
                 "node_id": node_id,
+                "NODE_key": node_key,
                 "parent_node_id": parent_id,
                 "node_type": node_type,
                 "bootstrap": bootstrap_value,
-
                 "original_label": node.name,
                 "branch_length": node.branch_length,
-                "descendant_tip_count": len(node.get_terminals()),
-                "descendant_tip_labels": ",".join(descendant_tips),
-                
-            })
+                "descendant_tip_count": len(descendant_tips),
+                "n_tips": len(descendant_tips),
+            }
+
+            if self.no_tip_labels:
+                row["descendant_tip_labels"] = ""
+            else:
+                row["descendant_tip_labels"] = ",".join(descendant_tips)
+
+            rows.append(row)
 
         return pd.DataFrame(rows)
-
 
 
     #### new adds here
@@ -409,8 +451,31 @@ class NodeAssigner:
         print(f"Wrote raw debug results to: {debug_output}")
 
 
-    def filter_and_save_debug(self, df, output_path):
+    def filter_and_save_debug(
+        self,
+        df,
+        output_path,
+        observed_fasta=None,
+        require_descendant_difference=True,
+        reference_lineages=None,
+        reference_lineage_report=None,
+        allow_missing_reference_tips=False,
+    ):
         raw_df = df.copy()
+
+        # Add ancestral sequence for NODE_* rows
+        raw_df = self.add_ancestral_sequence(raw_df)
+
+        # NodeInfo uses the ancestral FASTA dictionary for NODE_* and tip IDs.
+        # If observed_fasta is not provided, use ancestral_fasta as the descendant-tip source.
+        fasta_for_descendants = observed_fasta or self.ancestral_fasta
+
+        if fasta_for_descendants is not None:
+            raw_df = self.add_descendant_difference(raw_df, fasta_for_descendants)
+
+        if "maddog_diff_count" in raw_df.columns:
+            raw_df["diff_count"] = raw_df["maddog_diff_count"]
+            raw_df["n_diff_ancestor"] = raw_df["maddog_diff_count"]
 
         debug_path = Path(output_path).with_name(
             f"{Path(output_path).stem}_debug.tsv"
@@ -418,7 +483,7 @@ class NodeAssigner:
 
         raw_df.to_csv(debug_path, sep="\t", index=False)
 
-        result_df = df.copy()
+        result_df = raw_df.copy()
 
         result_df["bootstrap_numeric"] = pd.to_numeric(
             result_df["bootstrap"],
@@ -441,27 +506,907 @@ class NodeAssigner:
             result_df["descendant_tip_count"] >= self.min_tips
         ].copy()
 
-        result_df = result_df.drop(columns=["bootstrap_numeric"])
+        # NodeInfo-like difference filter: keep only nodes with diff_count != 0
+        if require_descendant_difference:
+            if "maddog_diff_count" not in result_df.columns:
+                raise ValueError(
+                    "maddog_diff_count column is missing. "
+                    "Provide --ancestral_fasta containing NODE_* and tip sequences, "
+                    "or provide --observed_fasta."
+                )
+
+            result_df["maddog_diff_count_numeric"] = pd.to_numeric(
+                result_df["maddog_diff_count"],
+                errors="coerce"
+            ).fillna(0)
+
+            result_df = result_df[
+                result_df["maddog_diff_count_numeric"] != 0
+            ].copy()
+
+        # overlap handling
+        result_df = self.add_overlap_information(result_df)
+
+        overlap_debug_path = Path(output_path).with_name(
+            f"{Path(output_path).stem}_overlap_debug.tsv"
+        )
+        result_df.to_csv(overlap_debug_path, sep="\t", index=False)
+
+        # MADDOG-like step:
+        # assign tips to the lowest/deepest qualifying node,
+        # then remove nodes with fewer than 2 uniquely assigned tips.
+        result_df = self.remove_nodes_with_few_exclusive_tips(
+        result_df,
+        min_exclusive_tips=self.min_exclusive_tips
+        )
+
+        exclusive_debug_path = Path(output_path).with_name(
+            f"{Path(output_path).stem}_exclusive_tip_debug.tsv"
+        )
+        result_df.to_csv(exclusive_debug_path, sep="\t", index=False)
+
+        # Now remove near-identical parent-child overlaps, using your existing logic.
+        result_df = self.remove_nearly_identical_overlaps(result_df)
+
+        # Recompute overlap/parent columns after removing near-identical child nodes.
+        result_df = self.add_overlap_information(result_df)
+
+        # Recompute final exclusive tip counts after parent-child filtering.
+        result_df = self.add_exclusive_tip_assignment(result_df)
+
+        result_df = self.assign_hierarchical_lineages(
+            result_df,
+            reference_lineages=reference_lineages,
+            reference_lineage_report=reference_lineage_report,
+            allow_missing_reference_tips=allow_missing_reference_tips,
+        )
+
+        result_df = result_df.drop(
+            columns=["bootstrap_numeric", "maddog_diff_count_numeric"],
+            errors="ignore"
+        )
 
         return result_df
+    
 
-if __name__ == "__main__":
-    parser = ArgumentParser(description="Link ancestral node details to tree")
+    # -----------------------------------------------------------
+    # Dealing with overlaps -------------------------------------
+    # -----------------------------------------------------------
 
-    parser.add_argument( "--tree", "--contree", dest="tree", required=True, help="IQ-TREE Newick tree file, for example .treefile or .contree.",)
-    parser.add_argument( "--ancestral_fasta", default=None, help="Optional ancestral sequences FASTA. IDs usually look like NODE_0000000.",)
-    parser.add_argument("--base_dir", default="tmp", help="Base directory where the output directory or files are created")
-    parser.add_argument("--output",default="NodeAssignment",help="Output table path. Use .csv for CSV; otherwise TSV is written.",)
-    parser.add_argument("--ancestral_prefix",default="NODE_",help="Prefix used by ancestral node FASTA IDs. Default: NODE_",)
-    parser.add_argument("--ancestral_digits",type=int,default=7,help="Number of zero-padding digits in ancestral node IDs. Default: 7",)
-    parser.add_argument("--ancestral_index_base",type=int,default=0,help="Base index for ancestral node IDs. Default 0 maps first internal node to NODE_0000000.",)
-    parser.add_argument("--support_mode",choices=["ufboot", "second", "shalrt", "alrt", "first"],default="ufboot",help="How to parse labels like SH-aLRT/UFBoot. Default: ufboot/second value.",)
-    parser.add_argument("--internal_order",choices=["preorder", "postorder", "level"],default="preorder",help="Internal node traversal order. Keep preorder to match the referenced MADDOG node_info.py logic.",)
-    parser.add_argument( "--no_tip_labels",action="store_true",help="Do not write the descendant_tip_labels column. Useful for very large trees.",)
-    parser.add_argument("--min_bootstrap",type=int,default=95.0,help="Minimum bootstrap/UFBoot value required to keep an internal node. Default: 95.",)
-    parser.add_argument("--min_tips",type=int,default=10,help="Minimum number of descendant tips required to keep an internal node. Default: 10, matching the MADDOG concept.",)
-    parser.add_argument("--observed_fasta",default=None,help="Observed aligned FASTA used for descendant difference checking.")
-    parser.add_argument("--no_descendant_difference_filter",action="store_true",help="Do not filter by descendant ancestral sequence difference.")
+    def _tip_set(self, value):
+        if pd.isna(value) or str(value).strip() == "":
+            return set()
+
+        return set(
+            tip.strip()
+            for tip in str(value).split(",")
+            if tip.strip()
+        )
+
+
+    def add_overlap_information(self, df):
+        """
+        NodeInfo-like overlap logic.
+
+        overlaps = number of selected internal descendant nodes.
+        direct_parent_overlap_node = closest selected ancestral internal node.
+        parent_child_tip_difference = parent n_tips - child n_tips.
+        """
+
+        df = df.copy()
+
+        internal_df = df[df["node_type"] == "internal"].copy()
+
+        if "Node" not in internal_df.columns:
+            raise ValueError(
+                "Node column is missing. Update node_table() to add numeric Node values."
+            )
+
+        internal_df["Node_numeric"] = pd.to_numeric(
+            internal_df["Node"],
+            errors="coerce"
+        )
+
+        internal_df = internal_df[
+            internal_df["Node_numeric"].notna()
+        ].copy()
+
+        internal_df["Node_numeric"] = internal_df["Node_numeric"].astype(int)
+
+        selected_nodes = set(internal_df["Node_numeric"].tolist())
+
+        node_to_id = dict(
+            zip(
+                internal_df["Node_numeric"],
+                internal_df["node_id"]
+            )
+        )
+
+        node_to_tip_count = dict(
+            zip(
+                internal_df["Node_numeric"],
+                internal_df["descendant_tip_count"]
+            )
+        )
+
+        overlap_child_count = {}
+        overlapping_child_nodes = {}
+        overlapping_child_numeric_nodes = {}
+        direct_parent_overlap_node = {}
+        direct_parent_overlap_numeric_node = {}
+        parent_child_tip_difference = {}
+
+        for node_number in selected_nodes:
+
+            descendants = self._internal_descendants_ape(
+                node_number,
+                include_self=False
+            )
+
+            selected_descendants = [
+                x for x in descendants
+                if x in selected_nodes
+            ]
+
+            overlap_child_count[node_number] = len(selected_descendants)
+
+            overlapping_child_numeric_nodes[node_number] = ",".join(
+                str(x) for x in selected_descendants
+            )
+
+            overlapping_child_nodes[node_number] = ",".join(
+                node_to_id.get(x, str(x))
+                for x in selected_descendants
+            )
+
+            closest_parent = ""
+
+            for ancestor in self._internal_ancestors_ape(node_number):
+                if ancestor in selected_nodes:
+                    closest_parent = ancestor
+                    break
+
+            if closest_parent == "":
+                direct_parent_overlap_numeric_node[node_number] = pd.NA
+                direct_parent_overlap_node[node_number] = ""
+                parent_child_tip_difference[node_number] = pd.NA
+            else:
+                direct_parent_overlap_numeric_node[node_number] = closest_parent
+                direct_parent_overlap_node[node_number] = node_to_id.get(
+                    closest_parent,
+                    str(closest_parent)
+                )
+
+                parent_tips = int(node_to_tip_count[closest_parent])
+                child_tips = int(node_to_tip_count[node_number])
+
+                parent_child_tip_difference[node_number] = parent_tips - child_tips
+
+        df["Node_numeric"] = pd.to_numeric(df["Node"], errors="coerce")
+
+        df["overlaps"] = df["Node_numeric"].map(overlap_child_count).fillna(0).astype(int)
+        df["overlap_child_count"] = df["overlaps"]
+
+        df["overlapping_child_nodes"] = df["Node_numeric"].map(
+            overlapping_child_nodes
+        ).fillna("")
+
+        df["overlapping_child_numeric_nodes"] = df["Node_numeric"].map(
+            overlapping_child_numeric_nodes
+        ).fillna("")
+
+        df["direct_parent_overlap_node"] = df["Node_numeric"].map(
+            direct_parent_overlap_node
+        ).fillna("")
+
+        df["direct_parent_overlap_numeric_node"] = df["Node_numeric"].map(
+            direct_parent_overlap_numeric_node
+        )
+
+        df["parent_child_tip_difference"] = df["Node_numeric"].map(
+            parent_child_tip_difference
+        )
+
+        df = df.drop(columns=["Node_numeric"], errors="ignore")
+
+        return df
+
+
+    def remove_nearly_identical_overlaps(self, df):
+        """
+        Removes nested child nodes that are too similar to their parent.
+
+        Example:
+            Parent = 291 tips
+            Child  = 290 tips
+            Difference = 1
+
+        If min_parent_tip_diff = 5, this child is removed.
+        """
+
+        df = df.copy()
+
+        if "parent_child_tip_difference" not in df.columns:
+            df = self.add_overlap_information(df)
+
+        keep_rows = []
+
+        for _, row in df.iterrows():
+            node_type = row.get("node_type", "")
+
+            if node_type != "internal":
+                keep_rows.append(True)
+                continue
+
+            parent_node = row.get("direct_parent_overlap_node", "")
+            tip_diff = row.get("parent_child_tip_difference", pd.NA)
+
+            # No overlapping parent, keep it
+            if parent_node == "" or pd.isna(tip_diff):
+                keep_rows.append(True)
+                continue
+
+            # Child is meaningfully different from parent
+            if int(tip_diff) >= self.min_parent_tip_diff:
+                keep_rows.append(True)
+            else:
+                keep_rows.append(False)
+
+        return df[keep_rows].copy()
+
+
+    def read_reference_lineages(self, path):
+        """Read a fixed two-column ID/Lineage lineage registry."""
+        path = Path(path)
+
+        if path.suffix.lower() == ".csv":
+            reference_df = pd.read_csv(path, dtype=str)
+        else:
+            reference_df = pd.read_csv(path, sep="\t", dtype=str)
+
+        required = {"ID", "Lineage"}
+        missing = sorted(required - set(reference_df.columns))
+
+        if missing:
+            raise ValueError(
+                f"Reference lineage file is missing required columns: {missing}. "
+                f"Available columns: {list(reference_df.columns)}"
+            )
+
+        reference_df = reference_df[["ID", "Lineage"]].copy()
+        reference_df["ID"] = reference_df["ID"].fillna("").str.strip()
+        reference_df["Lineage"] = reference_df["Lineage"].fillna("").str.strip()
+        reference_df = reference_df[
+            (reference_df["ID"] != "") & (reference_df["Lineage"] != "")
+        ].copy()
+
+        duplicate_ids = reference_df.loc[
+            reference_df["ID"].duplicated(keep=False), "ID"
+        ].unique().tolist()
+
+        if duplicate_ids:
+            preview = ", ".join(duplicate_ids[:10])
+            raise ValueError(
+                "Each reference sequence ID must occur once under its most "
+                f"specific lineage. Duplicate IDs: {preview}"
+            )
+
+        return reference_df
+
+
+    def _internal_clade_node_maps(self):
+        """Return clade<->NODE_* maps matching node_table() exactly."""
+        tree = self.load_tree()
+        internal_nodes = tree.get_nonterminals(order="preorder")
+
+        clade_to_node_id = {}
+        node_id_to_clade = {}
+
+        for i0, clade in enumerate(internal_nodes):
+            ancestral_index = self.ancestral_index_base + i0
+            node_id = (
+                f"{self.ancestral_prefix}"
+                f"{ancestral_index:0{self.ancestral_digits}d}"
+            )
+            clade_to_node_id[clade] = node_id
+            node_id_to_clade[node_id] = clade
+
+        return clade_to_node_id, node_id_to_clade
+
+
+    def map_fixed_lineages_to_mrcas(
+        self,
+        selected_df,
+        reference_lineages,
+        allow_missing_reference_tips=False,
+    ):
+        """
+        Map each fixed lineage to its MRCA in the current tree.
+
+        The registry is exclusive: each ID appears once under its most specific
+        lineage. A parent lineage is defined by its direct members plus all
+        members assigned to descendant labels (for example A1 includes A1.1).
+
+        Only an MRCA that remains in selected_df can receive the fixed name.
+        Missing/filtered MRCAs are reported rather than silently moved to a
+        different node.
+        """
+        tree = self.load_tree()
+        reference_df = self.read_reference_lineages(reference_lineages)
+        tree_tip_names = {tip.name for tip in tree.get_terminals()}
+        clade_to_node_id, _ = self._internal_clade_node_maps()
+        selected_node_ids = set(selected_df["node_id"].astype(str))
+
+        fixed_node_to_lineage = {}
+        report_rows = []
+        all_lineages = sorted(
+            reference_df["Lineage"].unique(),
+            key=lambda value: (value.count("."), value),
+        )
+
+        for lineage in all_lineages:
+            lineage_values = reference_df["Lineage"].astype(str)
+            mask = (
+                (lineage_values == lineage)
+                | lineage_values.str.startswith(lineage + ".")
+            )
+            defining_ids = reference_df.loc[mask, "ID"].tolist()
+            present_ids = [x for x in defining_ids if x in tree_tip_names]
+            missing_ids = [x for x in defining_ids if x not in tree_tip_names]
+
+            if missing_ids and not allow_missing_reference_tips:
+                preview = ", ".join(missing_ids[:10])
+                extra = (
+                    "" if len(missing_ids) <= 10
+                    else f" ... and {len(missing_ids) - 10} more"
+                )
+                raise ValueError(
+                    f"Fixed lineage {lineage} has {len(missing_ids)} reference "
+                    f"tip(s) absent from the tree: {preview}{extra}. Use "
+                    "--allow_missing_reference_tips only when this is expected."
+                )
+
+            status = "mapped"
+            mrca_node_id = ""
+            mrca_tip_count = ""
+
+            if not present_ids:
+                status = "no_reference_tips_present"
+            elif len(present_ids) == 1:
+                # A single terminal does not define an internal lineage MRCA.
+                status = "single_reference_tip_only"
+            else:
+                mrca = tree.common_ancestor(present_ids)
+                mrca_node_id = clade_to_node_id.get(mrca, "")
+                mrca_tip_count = len(mrca.get_terminals())
+
+                if mrca_node_id == "":
+                    status = "mrca_is_not_internal"
+                elif mrca_node_id not in selected_node_ids:
+                    status = "mrca_filtered_from_selected_nodes"
+                elif mrca_node_id in fixed_node_to_lineage:
+                    other = fixed_node_to_lineage[mrca_node_id]
+                    raise ValueError(
+                        f"Fixed lineages {other} and {lineage} resolve to the "
+                        f"same selected MRCA node {mrca_node_id}. Resolve the "
+                        "registry before assigning stable names."
+                    )
+                else:
+                    fixed_node_to_lineage[mrca_node_id] = lineage
+
+            report_rows.append(
+                {
+                    "lineage": lineage,
+                    "defining_reference_tip_count": len(defining_ids),
+                    "present_reference_tip_count": len(present_ids),
+                    "missing_reference_tip_count": len(missing_ids),
+                    "missing_reference_tips": ",".join(missing_ids),
+                    "mrca_node_id": mrca_node_id,
+                    "mrca_descendant_tip_count": mrca_tip_count,
+                    "status": status,
+                }
+            )
+
+        return fixed_node_to_lineage, pd.DataFrame(report_rows)
+
+
+    def _next_top_lineage(self, used_lineages, root_prefix="A"):
+        start_letter = ord(str(root_prefix)[0].upper())
+        index = 0
+
+        while True:
+            letter_number = start_letter + index
+            if letter_number <= ord("Z"):
+                candidate = f"{chr(letter_number)}1"
+            else:
+                candidate = f"{root_prefix}{index + 1}"
+
+            if candidate not in used_lineages:
+                return candidate
+
+            index += 1
+
+
+    def _next_child_lineage(self, parent_lineage, used_lineages):
+        child_index = 1
+
+        while True:
+            candidate = f"{parent_lineage}.{child_index}"
+            if candidate not in used_lineages:
+                return candidate
+            child_index += 1
+
+
+    def assign_hierarchical_lineages(
+        self,
+        df,
+        root_prefix="A",
+        reference_lineages=None,
+        reference_lineage_report=None,
+        allow_missing_reference_tips=False,
+    ):
+        """
+        Preserve lineage names from a fixed ID/Lineage registry.
+
+        Fixed names are mapped to the current-tree MRCA of their defining
+        reference tips. Remaining selected nodes receive new, non-conflicting
+        hierarchical names. Without a registry, the original deterministic
+        node-order naming behaviour is retained.
+        """
+        df = df.copy()
+
+        if "direct_parent_overlap_node" not in df.columns:
+            df = self.add_overlap_information(df)
+
+        df["lineage"] = ""
+        df["lineage_status"] = "new"
+        df["Node_numeric_sort"] = pd.to_numeric(df["Node"], errors="coerce")
+
+        node_ids = df["node_id"].astype(str).tolist()
+        node_set = set(node_ids)
+        node_order = dict(zip(df["node_id"].astype(str), df["Node_numeric_sort"]))
+
+        children_by_parent = {}
+        parent_by_node = {}
+
+        for _, row in df.iterrows():
+            node_id = str(row["node_id"])
+            parent_id = str(row.get("direct_parent_overlap_node", "") or "")
+            parent_by_node[node_id] = parent_id
+
+            if parent_id in node_set:
+                children_by_parent.setdefault(parent_id, []).append(node_id)
+
+        for parent_id in children_by_parent:
+            children_by_parent[parent_id] = sorted(
+                children_by_parent[parent_id],
+                key=lambda node_id: node_order.get(node_id, float("inf")),
+            )
+
+        top_nodes = sorted(
+            [
+                node_id for node_id in node_ids
+                if parent_by_node.get(node_id, "") not in node_set
+            ],
+            key=lambda node_id: node_order.get(node_id, float("inf")),
+        )
+
+        fixed_node_to_lineage = {}
+        report_df = pd.DataFrame()
+
+        if reference_lineages is not None:
+            fixed_node_to_lineage, report_df = self.map_fixed_lineages_to_mrcas(
+                df,
+                reference_lineages,
+                allow_missing_reference_tips=allow_missing_reference_tips,
+            )
+
+            report_path = reference_lineage_report
+            if report_path is None:
+                reference_path = Path(reference_lineages)
+                report_path = reference_path.with_name(
+                    f"{reference_path.stem}.current_tree_mrca_report.tsv"
+                )
+
+            report_path = Path(report_path)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_df.to_csv(report_path, sep="\t", index=False)
+            print(f"Wrote fixed-lineage MRCA report: {report_path}")
+
+        lineage_map = dict(fixed_node_to_lineage)
+        used_lineages = set(lineage_map.values())
+
+        # Traverse selected nodes from roots to descendants. Fixed labels win;
+        # unnamed nodes receive the next unused stable hierarchical label.
+        stack = list(reversed(top_nodes))
+
+        while stack:
+            node_id = stack.pop()
+
+            if node_id not in lineage_map:
+                parent_id = parent_by_node.get(node_id, "")
+                parent_lineage = lineage_map.get(parent_id)
+
+                if parent_lineage:
+                    lineage_map[node_id] = self._next_child_lineage(
+                        parent_lineage,
+                        used_lineages,
+                    )
+                else:
+                    lineage_map[node_id] = self._next_top_lineage(
+                        used_lineages,
+                        root_prefix=root_prefix,
+                    )
+
+                used_lineages.add(lineage_map[node_id])
+
+            children = children_by_parent.get(node_id, [])
+            for child_id in reversed(children):
+                stack.append(child_id)
+
+        df["lineage"] = df["node_id"].astype(str).map(lineage_map).fillna("")
+        df["lineage_status"] = df["node_id"].astype(str).apply(
+            lambda node_id: "existing" if node_id in fixed_node_to_lineage else "new"
+        )
+        df = df.drop(columns=["Node_numeric_sort"], errors="ignore")
+
+        return df
+
+    def _ape_parent_map(self):
+        tree = self.load_tree()
+        ntips = len(tree.get_terminals())
+        internals = self._internals_ape()
+
+        clade_to_ape = {
+            id(clade): ntips + i + 1
+            for i, clade in enumerate(internals)
+        }
+
+        ape_to_clade = {
+            ntips + i + 1: clade
+            for i, clade in enumerate(internals)
+        }
+
+        parent_by_id = {}
+
+        for parent in tree.find_clades(order="preorder"):
+            for child in parent.clades:
+                parent_by_id[id(child)] = parent
+
+        ape_parent = {}
+
+        for ape_node, clade in ape_to_clade.items():
+            parent = parent_by_id.get(id(clade))
+
+            while parent is not None and id(parent) not in clade_to_ape:
+                parent = parent_by_id.get(id(parent))
+
+            if parent is None:
+                ape_parent[ape_node] = None
+            else:
+                ape_parent[ape_node] = clade_to_ape[id(parent)]
+
+        return ape_parent
+
+
+    def _internal_descendants_ape(self, ape_node, include_self=False):
+        tree = self.load_tree()
+        ntips = len(tree.get_terminals())
+        internals = self._internals_ape()
+
+        internal_pos = int(ape_node) - ntips
+
+        if internal_pos < 1 or internal_pos > len(internals):
+            return []
+
+        clade = internals[internal_pos - 1]
+
+        clade_to_ape = {
+            id(clade_obj): ntips + i + 1
+            for i, clade_obj in enumerate(internals)
+        }
+
+        descendants = []
+
+        for i, descendant in enumerate(clade.get_nonterminals(order="preorder")):
+            if i == 0 and not include_self:
+                continue
+
+            descendant_node = clade_to_ape.get(id(descendant))
+
+            if descendant_node is not None:
+                descendants.append(descendant_node)
+
+        return descendants
+
+
+    def _internal_ancestors_ape(self, ape_node):
+        ape_parent = self._ape_parent_map()
+
+        ancestors = []
+        current = int(ape_node)
+
+        while True:
+            parent = ape_parent.get(current)
+
+            if parent is None:
+                break
+
+            ancestors.append(parent)
+            current = parent
+
+        return ancestors
+
+    def add_exclusive_tip_assignment(self, df):
+        """
+        MADDOG-like exclusive tip assignment.
+
+        Candidate nodes are ordered by:
+            1. overlaps, highest first
+            2. descendant_tip_count, highest first
+            3. Node number, lowest first
+
+        Tips are assigned repeatedly in this order.
+        Later/deeper candidate nodes overwrite earlier/parent assignments.
+
+        This gives the number of tips uniquely assigned to each candidate node.
+        """
+
+        df = df.copy()
+
+        if "overlaps" not in df.columns:
+            df = self.add_overlap_information(df)
+
+        if df.empty:
+            df["exclusive_tip_count"] = []
+            df["exclusive_tip_labels"] = []
+            return df
+
+        ordered_df = df.copy()
+
+        ordered_df["Node_numeric_sort"] = pd.to_numeric(
+            ordered_df["Node"],
+            errors="coerce"
+        )
+
+        ordered_df = ordered_df.sort_values(
+            by=["overlaps", "descendant_tip_count", "Node_numeric_sort"],
+            ascending=[False, False, True],
+            kind="mergesort"
+        ).reset_index(drop=True)
+
+        tip_to_node = {}
+
+        for _, row in ordered_df.iterrows():
+            node_id = row["node_id"]
+            descendant_tips = self._tip_set(row.get("descendant_tip_labels", ""))
+
+            for tip in descendant_tips:
+                tip_to_node[tip] = node_id
+
+        exclusive_tip_counts = []
+        exclusive_tip_labels = []
+
+        for _, row in df.iterrows():
+            node_id = row["node_id"]
+
+            assigned_tips = sorted(
+                tip for tip, assigned_node in tip_to_node.items()
+                if assigned_node == node_id
+            )
+
+            exclusive_tip_counts.append(len(assigned_tips))
+
+            if len(assigned_tips) > 0:
+                exclusive_tip_labels.append(",".join(assigned_tips))
+            else:
+                exclusive_tip_labels.append("")
+
+        df["exclusive_tip_count"] = exclusive_tip_counts
+        df["exclusive_tip_labels"] = exclusive_tip_labels
+
+        return df
+
+
+    def remove_nodes_with_few_exclusive_tips(
+        self,
+        df,
+        min_exclusive_tips=2,
+        max_iterations=100
+    ):
+        """
+        MADDOG-like iterative removal of candidate nodes with too few
+        uniquely assigned tips.
+
+        Original MADDOG repeats the exclusive assignment until no selected
+        cluster has fewer than 2 uniquely assigned sequences.
+        """
+
+        result_df = df.copy()
+
+        iteration = 0
+
+        while True:
+            if result_df.empty:
+                return result_df
+
+            result_df = self.add_overlap_information(result_df)
+            result_df = self.add_exclusive_tip_assignment(result_df)
+
+            too_small = result_df["exclusive_tip_count"] < min_exclusive_tips
+
+            if not too_small.any():
+                return result_df
+
+            result_df = result_df.loc[~too_small].copy()
+
+            iteration += 1
+
+            if iteration > max_iterations:
+                raise RuntimeError(
+                    "Too many iterations while removing nodes with few exclusive tips. "
+                    "Check overlap logic or input tree."
+                )
+
+def main():
+    parser = ArgumentParser(
+        description="Link ancestral node details to tree"
+    )
+
+    parser.add_argument(
+        "--tree",
+        "--contree",
+        dest="tree",
+        required=True,
+        help="IQ-TREE Newick tree file, for example .treefile or .contree.",
+    )
+
+    parser.add_argument(
+        "--ancestral_fasta",
+        default=None,
+        help="Optional ancestral sequences FASTA. IDs usually look like NODE_0000000.",
+    )
+
+    parser.add_argument(
+        "--base_dir",
+        default="tmp",
+        help="Base directory where the output directory or files are created",
+    )
+
+    parser.add_argument(
+        "--output",
+        default="NodeAssignment",
+        help="Output table path. Use .csv for CSV; otherwise TSV is written.",
+    )
+
+    parser.add_argument(
+        "--ancestral_prefix",
+        default="NODE_",
+        help="Prefix used by ancestral node FASTA IDs. Default: NODE_",
+    )
+
+    parser.add_argument(
+        "--ancestral_digits",
+        type=int,
+        default=7,
+        help="Number of zero-padding digits in ancestral node IDs. Default: 7",
+    )
+
+    parser.add_argument(
+        "--ancestral_index_base",
+        type=int,
+        default=0,
+        help=(
+            "Base index for ancestral node IDs. "
+            "Default 0 maps first internal node to NODE_0000000."
+        ),
+    )
+
+    parser.add_argument(
+        "--support_mode",
+        choices=["ufboot", "second", "shalrt", "alrt", "first"],
+        default="ufboot",
+        help="How to parse labels like SH-aLRT/UFBoot. Default: ufboot/second value.",
+    )
+
+    parser.add_argument(
+        "--internal_order",
+        choices=["preorder", "postorder", "level"],
+        default="preorder",
+        help=(
+            "Internal node traversal order. Keep preorder to match "
+            "the referenced MADDOG node_info.py logic."
+        ),
+    )
+
+    parser.add_argument(
+        "--no_tip_labels",
+        action="store_true",
+        help=(
+            "Do not write the descendant_tip_labels column. "
+            "Useful for very large trees."
+        ),
+    )
+
+    parser.add_argument(
+        "--min_bootstrap",
+        type=float,
+        default=95.0,
+        help=(
+            "Minimum bootstrap/UFBoot value required to keep an "
+            "internal node. Default: 95."
+        ),
+    )
+
+    parser.add_argument(
+        "--min_tips",
+        type=int,
+        default=10,
+        help=(
+            "Minimum number of descendant tips required to keep an "
+            "internal node. Default: 10, matching the MADDOG concept."
+        ),
+    )
+
+    parser.add_argument(
+        "--observed_fasta",
+        default=None,
+        help="Observed aligned FASTA used for descendant difference checking.",
+    )
+
+    parser.add_argument(
+        "--no_descendant_difference_filter",
+        action="store_true",
+        help="Do not filter by descendant ancestral sequence difference.",
+    )
+
+    parser.add_argument(
+        "--min_parent_tip_diff",
+        type=int,
+        default=5,
+        help=(
+            "Minimum tip difference between a parent and child node "
+            "to retain the child. Default: 5"
+        ),
+    )
+
+    parser.add_argument(
+        "--min_exclusive_tips",
+        type=int,
+        default=2,
+        help=(
+            "Minimum number of uniquely assigned tips required to keep "
+            "a candidate node. Default: 2, matching MADDOG overlap handling."
+        ),
+    )
+
+    parser.add_argument(
+        "--reference_lineages",
+        default=None,
+        help=(
+            "Optional fixed lineage registry with tab-separated columns ID and "
+            "Lineage. Each reference ID must appear once under its most "
+            "specific lineage."
+        ),
+    )
+
+    parser.add_argument(
+        "--reference_lineage_report",
+        default=None,
+        help=(
+            "Optional output TSV reporting how each fixed lineage mapped to its "
+            "MRCA in the current tree."
+        ),
+    )
+
+    parser.add_argument(
+        "--allow_missing_reference_tips",
+        action="store_true",
+        help=(
+            "Allow fixed reference IDs that are absent from the current tree. "
+            "Missing IDs are reported and excluded from MRCA calculation."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -476,12 +1421,22 @@ if __name__ == "__main__":
         args.internal_order,
         args.no_tip_labels,
         args.min_bootstrap,
-        args.min_tips
+        args.min_tips,
+        args.min_parent_tip_diff,
+        args.min_exclusive_tips,
     )
 
     df = checker.node_table()
-    
-    df = checker.filter_and_save_debug(df,Path(args.base_dir) / args.output)
+
+    df = checker.filter_and_save_debug(
+        df,
+        Path(args.base_dir) / args.output,
+        observed_fasta=args.observed_fasta,
+        require_descendant_difference=not args.no_descendant_difference_filter,
+        reference_lineages=args.reference_lineages,
+        reference_lineage_report=args.reference_lineage_report,
+        allow_missing_reference_tips=args.allow_missing_reference_tips,
+    )
 
     output_path = Path(args.base_dir) / args.output
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -490,3 +1445,7 @@ if __name__ == "__main__":
         df.to_csv(output_path, index=False)
     else:
         df.to_csv(output_path, sep="\t", index=False)
+
+
+if __name__ == "__main__":
+    main()

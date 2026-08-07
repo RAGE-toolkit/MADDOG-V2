@@ -1,3 +1,7 @@
+all_tmps
+tmp_del
+src/maddog/scripts/junk
+*.pyc
 junk
 rabv-gDB_16062026.db
 clade_based_trees
