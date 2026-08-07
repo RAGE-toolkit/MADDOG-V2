@@ -459,7 +459,26 @@ def main():
     parser.add_argument(
         "--out_prefix",
         required=True,
-        help="Output prefix, for example tmp/Indian-Sub",
+        help=(
+            "Output filename prefix. Relative prefixes are written beneath "
+            "--base_dir/--output_dir."
+        ),
+    )
+
+    parser.add_argument(
+        "--base_dir",
+        "--base-dir",
+        type=Path,
+        default=Path("tmp"),
+        help="Base output directory. Default: tmp",
+    )
+
+    parser.add_argument(
+        "--output_dir",
+        "--output-dir",
+        type=Path,
+        default=Path("lineage_assignment"),
+        help="Output directory beneath --base_dir. Default: lineage_assignment",
     )
 
     parser.add_argument(
@@ -505,7 +524,17 @@ def main():
 
     tree_path = Path(args.tree)
     node_assignment_path = Path(args.node_assignment)
-    out_prefix = Path(args.out_prefix)
+    requested_prefix = Path(args.out_prefix)
+    output_dir = (
+        args.output_dir
+        if args.output_dir.is_absolute()
+        else args.base_dir / args.output_dir
+    )
+    out_prefix = (
+        requested_prefix
+        if requested_prefix.is_absolute()
+        else output_dir / requested_prefix
+    )
 
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
 

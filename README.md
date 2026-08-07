@@ -1,4 +1,3 @@
-## Work in progress
 # MADDOG-V2
 
 MADDOG-V2 is a phylogenetic lineage assignment and analysis workflow.
@@ -36,21 +35,73 @@ maddog-lineage-assignment --help
 maddog-reduce-lineages --help
 ```
 
+## Running the pipeline
+
+The MADDOG-V2 workflow can be run step-by-step using the commands below.
+
+### 1. Clade assignment
+
+Assign query sequences to major and minor clades:
+
+```bash
+maddog-assignment \
+    --ref-aln reference/rabv/reference_sequences/ref.fa \
+    --ref-tree reference/rabv/tree/ref.treefile \
+    --query test_data/sea4_test/sea4.fa \
+    --threads 5 \
+    --taxon-major reference/rabv/epa_clades/ref_major_clades.tsv \
+    --taxon-minor reference/rabv/epa_clades/ref_minor_clades.tsv
+```
+
+### 2. Phylogeny reconstruction
+
+Generate clade-specific phylogenetic trees using the assignment output:
+
+```bash
+maddog-phylogeny \
+    --assignment tmp/CladeAssignment/clade_annotation.tsv \
+    --input-alignment tmp/CladeAssignment/input_seqs_with_ref_alignment.fa \
+    --clade-tree-dir clade_based_trees/
+```
+
+### 3. Re-root the phylogenetic tree
+
+Re-root the generated tree and order the nodes:
+
+```bash
+maddog-reroot \
+    --input_tree tmp/tree/Asian/Asian.iqtree.treefile \
+    --output tmp/tree/Asian/Asian.iqtree.rooted.treefile \
+    --order_node decrease
+```
+
+### 4. Assign node details
+
+Assign node information using the rooted tree and ancestral sequences:
+
+```bash
+maddog-assign-nodes \
+    --tree tmp/tree/Asian/Asian.iqtree.rooted.treefile \
+    --ancestral_fasta tmp/tree/Asian/Asian.treetime_ancestral/ancestral_sequences.fasta \
+    --base_dir tmp \
+    --output NodesAssigned.tsv \
+    --reference_lineages clade_based_trees/Asian/metadata.tsv
+```
+
+## Additional commands
+
+Additional MADDOG-V2 commands include:
+
+```bash
+maddog-lineage-assignment --help
+maddog-reduce-lineages --help
+```
+
+Use the `--help` option with any command to view the available arguments and usage information.
+
 ## Requirements
 
 The Conda environment defined in `env.yml` installs the required external tools and dependencies used by the MADDOG workflow.
-
-## Usage
-
-Each stage of the workflow is available as a separate command-line tool.
-
-Use the `--help` option with any command to view its available arguments.
-
-For example:
-
-```bash
-maddog-assignment --help
-```
 
 ## Version
 

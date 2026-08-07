@@ -12,9 +12,61 @@ Requires-Dist: ete3
 Requires-Dist: dendropy
 Dynamic: license-file
 
-Work in progress
+## Work in progress
 # MADDOG-V2
 
+MADDOG-V2 is a phylogenetic lineage assignment and analysis workflow.
+
+## Installation
+
+Create the Conda environment:
+
+```bash
 conda env create -f env.yml
+```
 
+Activate the environment:
 
+```bash
+conda activate maddog_v2
+```
+
+Install MADDOG-V2 from the wheel package:
+
+```bash
+pip install dist/maddog-2.0.0-py3-none-any.whl
+```
+
+## Check installation
+
+After installation, check the available MADDOG commands:
+
+```bash
+maddog-assignment --help
+maddog-phylogeny --help
+maddog-reroot --help
+maddog-assign-nodes --help
+maddog-lineage-assignment --help
+maddog-reduce-lineages --help
+```
+
+## Requirements
+
+The Conda environment defined in `env.yml` installs the required external tools and dependencies used by the MADDOG workflow.
+
+## Usage
+
+Each stage of the workflow is available as a separate command-line tool.
+
+Use the `--help` option with any command to view its available arguments.
+
+For example:
+
+```bash
+maddog-assignment --help
+```
+
+## Version
+
+MADDOG-V2
+Version 2.0.0

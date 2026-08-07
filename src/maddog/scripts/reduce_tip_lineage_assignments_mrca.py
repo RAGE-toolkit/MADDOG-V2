@@ -775,9 +775,23 @@ def main() -> None:
         help="Biopython tree format. Default: newick",
     )
     parser.add_argument(
+        "--base-dir",
+        "--base_dir",
+        type=Path,
+        default=Path("tmp"),
+        help="Base output directory. Default: tmp",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "--output_dir",
+        type=Path,
+        default=Path("final_output"),
+        help="Output directory beneath --base-dir. Default: final_output",
+    )
+    parser.add_argument(
         "--output",
         required=True,
-        help="Reduced tip assignment TSV/CSV.",
+        help="Reduced tip assignment TSV/CSV path beneath the output directory.",
     )
     parser.add_argument(
         "--mapping-output",
@@ -845,10 +859,20 @@ def main() -> None:
 
     assignment_path = Path(args.assignments)
     tree_path = Path(args.tree)
-    output_path = Path(args.output)
-    mapping_path = Path(args.mapping_output)
-    summary_path = Path(args.summary_output)
-    mrca_path = Path(args.mrca_output)
+    output_dir = (
+        args.output_dir
+        if args.output_dir.is_absolute()
+        else args.base_dir / args.output_dir
+    )
+
+    def resolve_output_path(value: str) -> Path:
+        path = Path(value)
+        return path if path.is_absolute() else output_dir / path
+
+    output_path = resolve_output_path(args.output)
+    mapping_path = resolve_output_path(args.mapping_output)
+    summary_path = resolve_output_path(args.summary_output)
+    mrca_path = resolve_output_path(args.mrca_output)
 
     assignments = read_table(assignment_path)
 
@@ -946,4 +970,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
