@@ -114,10 +114,6 @@ maddog-reduce-lineages \
     --mrca-output mrca
 ```
 
-## Requirements
-
-The Conda environment defined in `env.yml` installs the required external tools and dependencies used by the MADDOG workflow.
-
 ## Version
 
 MADDOG-V2
