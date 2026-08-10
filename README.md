@@ -35,7 +35,7 @@ maddog-lineage-assignment --help
 maddog-reduce-lineages --help
 ```
 
-## Running the pipeline
+## Running test data
 
 The MADDOG-V2 workflow can be run step-by-step using the commands below.
 
