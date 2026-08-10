@@ -88,16 +88,31 @@ maddog-assign-nodes \
     --reference_lineages clade_based_trees/Asian/metadata.tsv
 ```
 
-## Additional commands
+### 5. Lineage assignment
 
-Additional MADDOG-V2 commands include:
+Assign lineage labels to the tips using the phylogenetic tree and node assignment information:
 
 ```bash
-maddog-lineage-assignment --help
-maddog-reduce-lineages --help
+maddog-lineage-assignment \
+    --tree tmp/tree/Asian/Asian.iqtree.treefile \
+    --node_assignment tmp/NodesAssigned.tsv \
+    --out_prefix sea4_test
 ```
 
-Use the `--help` option with any command to view the available arguments and usage information.
+### 6. Reduce lineage assignments
+
+Reduce closely related lineage assignments using lineage size and MRCA-based information:
+
+```bash
+maddog-reduce-lineages \
+    --assignments tmp/lineage_assignment/sea4_test.tip_lineage_assignments.tsv \
+    --output test_sea4.reduced.tip_lineage_assignments.tsv \
+    --mapping-output test_sea4.lineage_reduction_map.tsv \
+    --summary-output test_sea4.reduced.lineage_summary.tsv \
+    --min-lineage-size 20 \
+    --tree tmp/tree/Asian/Asian.iqtree.rooted.treefile \
+    --mrca-output mrca
+```
 
 ## Requirements
 
