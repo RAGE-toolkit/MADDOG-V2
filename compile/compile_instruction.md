@@ -1,4 +1,4 @@
-after any script modifications do the following to re-build the package
+After any script modifications do the following to re-build the package
 
 python -m pip install build
 
